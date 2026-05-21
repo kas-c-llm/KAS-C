@@ -1,0 +1,928 @@
+WarningCode,OfficialDefinition,Source,Category,TrueTechnicalDebt,CommonFalsePositive,CommonUnactionable,MoreContext,Source,Count
+NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE,Return value from a method is dereferenced without a null check and may lead to a NullPointerException when the code is executed.,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Dodgy code (STYLE),Dereferencing a possibly null return value without checking. Ex- Real Java API can return null.,"1. The analyzer only reasons about local code paths and does not understand guarantees coming from external systems (cloud services, configs, APIs), framework lifecycle, or library contracts, so it may report a null risk even when the value is guaranteed to be non-null in practice. For example,
+
+final ImmutableMap<String, Long> myMap = ImmutableMap.of(""foo"", 3);
+final long value = myMap.getOrDefault(""bar"", 0);
+
+Here, ImmutableMap does not permit null values, and getOrDefault(""bar"", 0) uses a non-null default value. Even so, SpotBugs reports a possible null path because it does not precisely model the API’s non-null behavior, making this a false positive.
+
+Non-null guarantees may originate from diverse sources (APIs, frameworks, configs, invariants), so avoid matching only specific examples like ImmutableMap.
+
+2. SpotBugs may produce false positives when analyzing generic collections because it does not properly handle nullable annotations on generic type elements. 
+Due to type erasure, annotations like @NonNull are not preserved in bytecode, leading the analyzer to assume elements may be null even when they are guaranteed non-null. Similarly, even when elements are declared @Nullable but properly null-checked before use, SpotBugs may still incorrectly report null-dereference risks.
+
+3. The field is already null-checked but the analyzer incorrectly assumes the delegated method might return null. For example,
+          public String ownerOf(Class<?> clazz) {
+            if (classOwnership != null) {
+                return classOwnership.ownerOf(clazz);
+          }
+The code already checks classOwnership != null before calling the method, so there is no actual risk of dereferencing a null object on this path. 
+
+4. The code explicitly validates a possibly null return value using Objects.requireNonNull(...), but the analyzer still reports a null-dereference warning on that same value. For example,
+
+final String bar = getString(""bar"");
+Objects.requireNonNull(bar, ""Bar must not be null"");
+
+Here, getString(...) may return null, but the code immediately checks that value with Objects.requireNonNull(...). If it is null, the program fails fast at the check itself. So the warning is a false positive caused by the analyzer not properly modeling requireNonNull(...). ","1. Null can occur because configuration values may legitimately be absent or invalid at runtime. For example, Java’s Properties.getProperty() officially returns null when a key is missing. In some projects, such absence is acceptable by design: the affected feature is optional, or the component is expected to fail/abort initialization when required config is unavailable. In such cases, NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE reflects a tolerated configuration-failure path rather than an actionable bug.",,"TD-  Spotbugs rules, Reddit(https://www.reddit.com/r/javahelp/comments/wr1b5v/help_with_nullpointerexception_killing_my_brain/), FP- Example(fll_a_144), examples, https://github.com/spotbugs/spotbugs/issues/2548. https://github.com/spotbugs/spotbugs/issues/2965, U- LLM generated from Oracle docs- https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Properties.html?utm_source=chatgpt.com ","Analyzed Examples - 1
+Issues - 2
+External Discussions - 1
+Java Documentations - 1"
+NP_NONNULL_RETURN_VIOLATION,"This method may return a null value, but the method (or a superclass method which it overrides) is declared to return @Nonnull.   ",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Correctness (CORRECTNESS),"Method may return null, but is declared @Nonnull","1. The method guarantees a non-null return value across all execution paths, but the static analyzer cannot infer the non-null guarantees of invoked library methods.
+
+For example:
+private @Nonnull String generateRandomPrefix() {
+    int prefixInteger = RANDOM.nextInt(4096);
+    String prefixString = Integer.toHexString(prefixInteger);
+    return StringUtils.leftPad(prefixString, 3, '0');
+}
+
+SpotBugs reports NP_NONNULL_RETURN_VIOLATION because it assumes StringUtils.leftPad(...) may return null. However, leftPad() only returns null when the input string is null. In this code, prefixString is guaranteed to be non-null because Integer.toHexString(...) never returns null. Therefore, there is no execution path where the method returns null. The warning arises from conservative analysis of external library methods, making it a false positive.
+
+2. There is no visible null return path in the method, but the analyzer cannot verify the null-safety of invoked methods. For example:
+
+@Nonnull
+public String getApiToken() {
+    if (this.apiToken == null) {
+        return ""deprecated"";
+    }
+    return hasPermissionToSeeToken()
+            ? getApiTokenInsecure()
+            : Messages.ApiTokenProperty_ChangeToken_TokenIsHidden();
+}
+
+All explicit return values are non-null (""deprecated"" and the message string). The warning is triggered because SpotBugs cannot guarantee that getApiTokenInsecure() returns a non-null value. Here, this method is known to be non-null, So there is no real null path, and the warning is a false positive caused by inter-procedural analysis limitation.","1. The method intentionally returns null due to intentional design. For example,
+
+//        @SuppressFBWarnings(
+//                value = ""NP_NONNULL_RETURN_VIOLATION"",
+//                justification = ""NullSerializer is only used for null values."")
+        @Override
+        public Object read(final ObjectDataInput in) throws IOException {
+            return null;
+        }
+
+Here, The method deliberately returns null as part of its serialization logic. The warning is valid from the tool’s perspective but does not represent a bug, making it unactionable.
+",,"Analyzed examples, spotbugs issues","Analyzed Examples - 1
+Issues - 2
+External Discussions - 0
+Java Documentations - 0"
+NP_NONNULL_PARAM_VIOLATION,"This method passes a null value as the parameter of a method which must be non-null. Either this parameter has been explicitly marked as @Nonnull, or analysis has determined that this parameter is always dereferenced.",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Correctness (CORRECTNESS),Method call passes null to a non-null parameter,"1. This false positive occurs when a parameter is guaranteed non-null through prior validation or API contracts, but SpotBugs cannot infer this across method boundaries.
+SpotBugs performs local bytecode analysis and cannot propagate null-safety guarantees established in a calling method. Even with an explicit null check, SpotBugs may still flag the downstream call site. Example:
+
+public void process(String input) {
+          if (input == null) {
+                 throw new IllegalArgumentException(""input must not be null"");
+          }
+                 handleInput(input); // SpotBugs flags this as NP_NONNULL_PARAM_VIOLATION
+          }
+
+private void handleInput(@NonNull String input) {
+          System.out.println(input.length());
+}
+
+SpotBugs flags this because it assumes input could still be null when passed to handleInput(). However, the null check in process() guarantees it is non-null at that point. Therefore, there is no real issue in the code.
+
+2. SpotBugs incorrectly reports NP_NONNULL_PARAM_VIOLATION when passing null to certain methods due to incomplete understanding of method nullability. For example,
+
+CompletableFuture<Object> future = new CompletableFuture<>();
+future.completeExceptionally(new RuntimeException(""oops""));
+future.getNow(null);  // valid usage
+
+SpotBugs flags this because it assumes the parameter must be non-null. However, according to the Java API, CompletableFuture.getNow() allows null as a valid default value. Therefore, there is no real issue in the code.","1. The warning occurs in test code where null values are intentionally passed to simulate edge cases, failure scenarios, or incomplete data. In such contexts, strict non-null contracts are often relaxed to verify behavior under exceptional conditions.",,"Analyzed examples, spotbugs issues - https://github.com/spotbugs/spotbugs/issues/1001","Analyzed Examples - 2
+Issues - 1
+External Discussions - 0
+Java Documentations - 0"
+EI_EXPOSE_REP2,May expose internal representation by incorporating reference to a mutable object.,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Malicious code vulnerability (MALICIOUS_CODE),Storing external mutable object directly in internal field,"1. Object is effectively immutable
+Sometimes the constructor parameter or assigned object is an immutable implementation, but the field is declared using a mutable-looking interface type such as Map or List. SpotBugs sees the interface type and warns, even though the actual runtime object is immutable. For example,
+
+private Map<String, String> overrides;
+
+public CLISetup(String commandLine, ImmutableMap<String, String> overrides) {
+    this.commandLine = commandLine;
+    this.overrides = overrides;
+}
+
+Here, SpotBugs raises EI_EXPOSE_REP2 on this.overrides = overrides, even though the passed object is a Guava immutable object. 
+
+2. Internal collection is made unmodifiable, but the tool fails to detect that it is safe. 
+A collection may be wrapped with Collections.unmodifiableList, Collections.unmodifiableMap, Collections.singletonMap, Collections.emptyMap, or similar APIs before being stored or returned. In such cases, external code cannot modify it through that reference, but SpotBugs may still warn because it does not fully recognize the wrapper pattern in that code path.
+
+3. The collection is already defensively copied or made immutable before assignment, but the tool cannot recognize the guarantee. 
+A very common safe pattern is to copy incoming collections with List.copyOf, Set.copyOf, or Map.copyOf before storing them. These methods create immutable copies. But if that copy happens inside a slightly more complex expression, SpotBugs may fail to infer that the stored value is safe.","1. Mutable data is intentionally not copied to avoid performance overhead.
+
+Example: The constructor allows the caller to choose whether the byte array should be copied:
+
+if (copy && bytes != null) {
+    this.bytes = new byte[bytes.length];
+    System.arraycopy(bytes, 0, this.bytes, 0, bytes.length);
+} else {
+    this.bytes = bytes;
+}
+
+If copy is false, the original bytes array is stored directly. SpotBugs flags this as EI_EXPOSE_REP2 because external mutable data is assigned to an internal field. However, this is intentional: image byte arrays can be large, and always making a defensive copy would add unnecessary memory and CPU cost. Since the API explicitly gives control over copying, this warning is unactionable. 
+
+2. Framework, dependency, service, or metadata-related objects are stored by design; defensive copying is not always practical. For example:
+
+public Image(byte[] bytes, ImageInfo imageInfo, boolean copy) {
+    if (copy && bytes != null) {
+        this.bytes = new byte[bytes.length];
+        System.arraycopy(bytes, 0, this.bytes, 0, bytes.length);
+    } else {
+        this.bytes = bytes;
+    }
+
+    if (imageInfo.getMetadata() == null || copy) {
+        Metadata metadata;
+        try {
+            metadata = ImagesUtil.getMetadata(this.bytes, imageInfo.getFormat());
+        } catch (ImageProcessingException | IOException e) {
+            LOGGER.error(""Error reading image metadata: {}"", e.getMessage());
+            LOGGER.trace("""", e);
+            metadata = new Metadata();
+        }
+        imageInfo = imageInfo.copy(metadata);
+    }
+
+    this.imageInfo = imageInfo;
+}
+
+The constructor stores imageInfo directly:
+
+this.imageInfo = imageInfo;
+
+Before that, it creates a copied version only when needed:
+
+if (imageInfo.getMetadata() == null || copy) {
+    imageInfo = imageInfo.copy(metadata);
+}
+
+This shows that the code already applies selective copying when necessary, instead of always cloning the whole object. That suggests the object is being managed deliberately, and full defensive copying is not always practical or needed. In this context, storing the reference is a design choice, so the warning is considered unactionable.",,"TD- Spotbugs rules, 
+Unactionable - Developer's comments, FP- Stack overflows","Analyzed Examples - 6
+Issues - 1
+External Discussions - 1
+Java Documentations - 0"
+EI_EXPOSE_REP,May expose internal representation by returning reference to mutable object.,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Malicious code vulnerability (MALICIOUS_CODE),Returning internal mutable field directly,"1) Returning an internal Object that is effectively immutable, Even though its type appears mutable.
+Example:
+private final Map<String, String> config;
+
+public Map<String, String> getConfig() {
+    return config;  // flagged as EI_EXPOSE_REP
+}
+
+But the object assigned is:
+this.config = ImmutableMap.of(""key"", ""value"");
+
+Here, ImmutableMap (from Guava) is an immutable implementation. Although the method returns the internal reference, the returned object cannot be modified by the caller. SpotBugs flags this as EI_EXPOSE_REP because the field is declared using the Map interface, which is generally mutable. Spotbugs cannot guarantee that the runtime object is immutable.  
+
+Since the returned object is effectively immutable, exposing it does not introduce any risk of unintended modification. Therefore, this warning can be considered a false positive.
+
+2. Internal collection is made unmodifiable through wrapping, but the tool fails to detect that it’s safe.
+Example: In SpotBugs issue #2140, EI_EXPOSE_REP is reported for a Lombok-generated getter, even though the underlying collection is constructed using Collections.emptyMap, Collections.singletonMap, or Collections.unmodifiableMap. Since these produce immutable or unmodifiable collections, returning the field does not allow callers to mutate internal state. This makes the warning a false positive caused by the tool failing to recognize the immutability introduced by generated code.","1. Mutable data is intentionally not copied to avoid performance overhead.
+
+In some cases, developers deliberately avoid making defensive copies of mutable data (e.g., arrays or buffers) to reduce memory usage and CPU overhead, especially when working with large data such as media files. For example:
+
+public byte[] getBytes(boolean copy) {
+    if (copy) {
+        byte[] result = new byte[bytes.length];
+        System.arraycopy(bytes, 0, result, 0, bytes.length);
+        return result;
+    }
+    return bytes;
+}
+
+This code is from UniversalMediaServer, which processes large media data such as images, thumbnails, and buffers. Creating defensive copies for such data can be expensive in terms of memory and performance. Therefore, the method provides an option to return the original array directly when copying is not required.
+
+Although SpotBugs flags this as EI_EXPOSE_REP (exposing internal representation), the behavior is intentional and performance-driven. Hence, the warning is considered unactionable. 
+
+2. Dependency, service, or framework-managed objects are shared by design; defensive copying is not feasible.
+
+Dependency/service objects (e.g., database clients, S3 clients, configuration objects) and framework-managed or metadata objects are typically passed and stored as references. These objects are externally managed, often complex, and not designed to be copied. Creating defensive copies is either infeasible, meaningless, or would break the intended shared behavior. Therefore, exposing them directly is intentional and acceptable.",,"TD- Spotbugs rules, 
+Unactionable - Developer's comments, FP- Stack overflows","Analyzed Examples - 6
+Issues - 1
+External Discussions - 1
+Java Documentations - 0"
+URF_UNREAD_PUBLIC_OR_PROTECTED_FIELD,Public or protected field is never read.,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Dodgy code (STYLE),"Field declared but unused anywhere, fields are repeatedly assigned but never read in analyzed code (no getters/consumers)","1. Field Is Used by Subclasses or External Test Code, but the Analyzer Cannot Detect Cross-Class Usage. For example,
+/**
+ * Requirements for running tests.
+ */
+@SuppressFBWarnings(
+    value = ""URF_UNREAD_PUBLIC_OR_PROTECTED_FIELD"",
+    justification = ""Used by the JUnit framework""
+)
+@Rule
+public RuleChain chain =
+    RuleChain.outerRule(new IntegrationTestUtils.TomcatRequired());
+
+This field (chain) is not explicitly read within the class, so SpotBugs flags it as URF_UNREAD_PUBLIC_OR_PROTECTED_FIELD. However, the field is annotated with @Rule, which is part of the JUnit framework. JUnit uses reflection to automatically detect and execute fields annotated with @Rule during test execution. As this access happens outside normal method calls, the field appears “unused” to static analysis.
+
+","1. Field is intentionally kept for debugging/diagnostics.
+
+2. Field Is Accessed Through External Systems (e.g., JSON, JS, Reflection, or Frontend), Which Are Invisible to Static Analysis. For example,
+@SuppressFBWarnings(
+    value = ""URF_UNREAD_PUBLIC_OR_PROTECTED_FIELD"",
+    justification = ""Used by JSON""
+)
+public List<BracketInfo> allBracketInfo = new LinkedList<>();
+
+The field allBracketInfo is not accessed directly within the Java code, so SpotBugs flags it as unread. However, this field is used during JSON serialization/deserialization, which rely on reflection to read and populate fields at runtime. Since this access happens outside explicit Java method calls, static analysis cannot detect it.",,"Developers's comments from analyzed examples, Stack Overflow","Analyzed Examples - 8
+Issues - 0
+External Discussions - 1
+Java Documentations - 0"
+DM_GC,Code explicitly invokes garbage collection. Any situation that forces hundreds or thousands of garbage collections will bring the machine to a crawl.,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Performance,System.gc() used in production code,Rarely a False Positive,"1. Explicit GC Used in Test, Benchmark, or Debugging Contexts. Example:
+/**
+ * For debugging. Expose URL to perform GC.
+ */
+@SuppressFBWarnings(""DM_GC"")
+@RequirePOST
+public void doGc(StaplerResponse rsp) throws IOException {
+    checkPermission(Jenkins.ADMINISTER);
+    System.gc();  // flagged as DM_GC
+    rsp.setStatus(HttpServletResponse.SC_OK);
+    rsp.setContentType(""text/plain"");
+    rsp.getWriter().println(""GCed"");
+}
+
+The call to System.gc() is flagged by SpotBugs as DM_GC because explicit garbage collection is generally discouraged in production code. However, in this case, the explicit GC call is intentionally exposed for debugging/administrative purposes, so it represents a deliberate design choice rather than a defect.
+
+2. Context-specific intentional GC usage (ex- managing large memory or cleaning up file handles/resources). Example:
+@SuppressFBWarnings({""DM_GC""})
+public static synchronized void slowSecureDelete(File file) throws IOException {
+  if (file != null && file.exists()) {
+    try (RandomAccessFile raf = new RandomAccessFile(file, ""rws"")) {
+      // Prep for file delete as this can be fiddly on Windows
+      // Make sure it is writable and any references to it are garbage
+      // collected and finalized.
+      if (!file.setWritable(true)) {
+        throw new IOException(""Could not write to file "" + file.getAbsolutePath());
+      }
+      System.gc();
+
+      long length = file.length();
+      raf.seek(0);
+      raf.getFilePointer();
+      int pos = 0;
+      while (pos < length) {
+        raf.write(SECURE_DELETE_FILL_BYTES);
+        pos += SECURE_DELETE_FILL_BYTES.length;
+      }
+    }
+    boolean deleteSuccess = file.delete();
+    log.debug(""Result of delete of file '"" + file.getAbsolutePath() + ""' was "" + deleteSuccess);
+  }
+}
+
+In this case, the GC call is used intentionally in a resource-sensitive file deletion workflow. The surrounding comment explains the purpose clearly: before deleting the file, the code attempts to ensure that lingering references are garbage collected and finalized, which can be important on platforms such as Windows where file deletion may fail if resources are still being held. Since it is used for a specific operational purpose rather than by mistake, the warning is better treated as unactionable rather than a defect.
+","Calling System.gc() may trigger a Full GC, which causes a Stop-the-World pause. So, not recommended.       Flag: -XX:+DisableExplicitGC
+If this JVM option is set, all calls to System.gc() are ignored. It prevents developers to accidentally prevent harming peformance. ","Medium, SpotBugs Documentation, Developer's clear comments","Analyzed Examples - 2
+Issues - 0
+External Discussions - 1
+Java Documentations - 1"
+SE_BAD_FIELD,Serializable class contains non-serializable field.,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Bad practice (BAD_PRACTICE),Non-serializable field in Serializable class,"       1. Enums are serialized differently than normal classes (only their name is stored), so their fields do not need to be Serializable or transient; SpotBugs cannot infer this special enum serialization behavior. Example:
+public enum Status {
+    SUCCESS(new Helper()),
+    FAILURE(new Helper());
+
+    private Helper helper;  // flagged as SE_BAD_FIELD
+
+    Status(Helper helper) {
+        this.helper = helper;
+    }
+}
+
+class Helper {
+    // not Serializable
+}
+
+SpotBugs flags the field helper because it is not Serializable, and the enum is implicitly serializable. According to standard Java serialization rules, all non-transient fields in a serializable class should also be serializable.
+However, enums in Java follow a special serialization mechanism: Only the name of the enum constant is serialized. Fields inside the enum are not serialized at all.
+Because of this, the helper field does not need to implement Serializable or be marked as transient.","1. Serialization warning in auto-generated classes where Java serialization is not actually used. Example:
+public static final class Tag extends com.google.protobuf.GeneratedMessage
+    implements TagOrBuilder {
+
+  private final com.google.protobuf.UnknownFieldSet unknownFields;
+
+  @Override
+  public final com.google.protobuf.UnknownFieldSet getUnknownFields() {
+    return this.unknownFields;
+  }
+
+  private static final long serialVersionUID = 0L;
+
+  @Override
+  protected Object writeReplace() throws java.io.ObjectStreamException {
+    return super.writeReplace();
+  }
+}
+
+This class is auto-generated by Protocol Buffers and extends com.google.protobuf.GeneratedMessage. SpotBugs flags unknownFields as SE_BAD_FIELD because the class appears serializable, while the field may not satisfy normal Java serialization expectations.
+
+However, this class is not intended to use regular Java object serialization in the way SpotBugs assumes. Instead, it relies on Protocol Buffers’ own serialization mechanism. Since the class is generated code and serialization is handled by the protobuf framework rather than standard Java serialization, the warning does not indicate a meaningful defect. So the issue is considered unactionable. 
+
+2. Class is not intended to be serialized by the developer.
+
+@SuppressFBWarnings(
+    value = ""SE_BAD_FIELD"",
+    justification = ""This class isn't going to be serialized""
+)
+private TournamentSchedule mScheduleData;
+
+SpotBugs flags this field as SE_BAD_FIELD because it belongs to a class that appears to be serializable, while the field type (TournamentSchedule) may not implement Serializable. However, the developer explicitly indicates that the class is not intended to be serialized. In such cases, the presence of non-serializable fields does not pose any real risk, since Java serialization is not part of the class’s intended usage.
+",,"Developer's clear justifications, Java official documentation on enum serialization, Stack overflow","Analyzed Examples - 1
+Issues - 0
+External Discussions - 1
+Java Documentations - 1"
+RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE,Redundant null check of value known to be non-null.,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Dodgy code (STYLE),Checking null on value guaranteed non-null,"1. Field is not guaranteed non-null, so removing null check could introduce a potential NullPointerException. For example:
+@Override
+public boolean equals(Object object) {
+    if (this == object) {
+        return true;
+    }
+    if (object == null || !(object instanceof Player)) {
+        return false;
+    }
+    Player other = (Player) object;
+
+    if (id() == null) {   // flagged as redundant
+        if (other.id() != null) {
+            return false;
+        }
+    } else if (!id().equals(other.id())) {
+        return false;
+    }
+    return true;
+}
+
+SpotBugs flags the null check id() == null as redundant, assuming that the method id() always returns a non-null value. However, this assumption is not guaranteed. The id() method may legitimately return null, and the null check is necessary to safely compare values and avoid a NullPointerException when calling .equals().
+This pattern is a common and correct implementation of equals, where null-safe comparison is explicitly handled.
+","1. Null check is intentionally preserved for defensive programming. For example:
+
+/**
+ * Sync the current wallet from the date specified.
+ * If Optional.absent() is specified no checkpointing is performed.
+ */
+public void replayWallet(File applicationDataDirectory,
+                         Optional<DateTime> replayDateTime,
+                         boolean useFastCatchup,
+                         boolean clearMemPool) {
+
+  Preconditions.checkNotNull(replayDateTime);
+
+  // See if the replayDate is within the current block store's knowledge
+  Optional<Stack<StoredBlock>> replayStoredBlockStack =
+      findStoredBlockBefore(replayDateTime);
+
+  if (replayStoredBlockStack.isPresent()) {
+    replayConfig = new ReplayConfig(replayStoredBlockStack.get());
+  } else {
+    if (replayDateTime.isPresent()) {
+      // Use the specified replay date
+      replayConfig = new ReplayConfig(replayDateTime.get());
+    } else {
+      // No replay date nor a stored block
+      replayConfig = new ReplayConfig();
+    }
+  }
+}
+SpotBugs flags the null-related check as redundant because replayDateTime has already been validated using Preconditions.checkNotNull. However, this only guarantees that the Optional object itself is not null. The Optional may still be empty, so checks like replayDateTime.isPresent() are necessary before calling get().
+
+This pattern is intentional and ensures safe handling of optional values. Therefore, the warning is considered unactionable.
+",,"Code example (UMS, mh_a_87), Github issues","Analyzed Examples - 1
+Issues - 1
+External Discussions - 0
+Java Documentations - 0"
+SF_SWITCH_FALLTHROUGH,Method contains a switch statement where one case branch will fall through to the next case. Usually this case need to be ended with a break or return.,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Dodgy code (STYLE),Missing break causes unintended fallthrough,"1. SpotBugs misinterprets compiler-generated control flow as switch fall-through, even though execution does not proceed to the next case. For example:
+for (;;) {
+  switch (drainStatus) {
+    case PROCESSING_TO_IDLE:
+      // execution continues the outer loop
+      continue;
+
+    case REQUIRED:
+      scheduleTask();
+      break;
+  }
+}
+
+SpotBugs flags this as SF_SWITCH_FALLTHROUGH because there is no break after PROCESSING_TO_IDLE. However, execution does not fall through to the next case; it exits the current switch iteration by executing continue on the surrounding loop. This is a false positive caused by the analyzer misinterpreting the compiled control flow.","1. Intentional fall-through in a switch statement used to execute cumulative case logic (e.g., byte packing, grouped cases or state transition). For example:
+
+public void showOperationSucceeded(HardwareWalletEvent event) {
+
+  switch (state) {
+
+    case CREDENTIALS_ENTER_PIN:
+      // Indicate a successful PIN
+      getEnterPinPanelView().setPinStatus(true, true);
+
+      // Fall through to ""press confirm for unlock""
+    case CREDENTIALS_PRESS_CONFIRM_FOR_UNLOCK:
+
+      // Shared logic for both states
+      unlockWalletWithEntropy();
+      break;
+
+    default:
+      // Other states
+  }
+}
+
+SpotBugs flags this as SF_SWITCH_FALLTHROUGH because there is no break after the CREDENTIALS_ENTER_PIN case. However, the fall-through is intentional, as indicated by the comment, and is used to reuse shared logic.
+In this case, it also represents a state transition, where the program moves from CREDENTIALS_ENTER_PIN to CREDENTIALS_PRESS_CONFIRM_FOR_UNLOCK without duplicating code. 
+
+This pattern is commonly used for grouped logic and state transitions, so the warning is considered unactionable.",,"Developer's explicit comments, Github issues (https://github.com/spotbugs/spotbugs/issues/3617)","Analyzed Examples - 2
+Issues - 1
+External Discussions - 0
+Java Documentations - 0"
+DM_DEFAULT_ENCODING,"Performs byte–String conversion using the default platform encoding, which can cause behavior to vary across systems; use an API that specifies an explicit charset instead.",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Experimental (EXPERIMENTAL),Reader/Writer without specifying encoding,FP is rare and context-dependent,"1. Test or debug code where encoding is not necessary. For example:
+
+@Test
+public void testWriteConfiguration_ExampleWithUnknown() throws Exception {
+
+  ByteArrayOutputStream baos = new ByteArrayOutputStream();
+  Yaml.writeYaml(baos, configuration.get());
+
+  FixtureAsserts.assertStringMatchesNormalisedStringFixture(
+    ""Writing out fields does not match original fixture"",
+    baos.toString(),
+    ""/fixtures/example-configuration.yaml""
+  );
+}
+
+SpotBugs flags this as DM_DEFAULT_ENCODING because baos.toString() uses the platform default encoding. However, this is test code that compares fixture output, and the encoding may not be important in that local test context. Since the code is not part of production logic and the behavior is intentionally accepted for testing purposes, the warning is considered unactionable.
+
+2. Intentional use of platform default encoding. For example:
+
+BufferedReader br = new BufferedReader(new FileReader(file));  // uses default encoding
+
+SpotBugs flags this as DM_DEFAULT_ENCODING because FileReader uses the platform’s default encoding, which may vary across systems.
+However, in some cases, this behavior is intentional. If the file is controlled by the application and is expected to follow the system’s local encoding, using the default encoding is appropriate. In such cases, explicitly using Charset.defaultCharset() does not change the behavior but makes the intention clearer to future maintainers. This intention is often documented through comments or Javadoc.
+
+Therefore, when platform-dependent encoding is used deliberately and documented, the warning does not indicate a real defect and is considered unactionable.",,"Analyzed example, Stack Overflow discussion - https://stackoverflow.com/questions/22115246/reliance-on-default-encoding-what-should-i-use-and-why  https://www.ibm.com/docs/en/semeru-runtime-ce-z/21.0.0?topic=guide-file-encoding-utf-8-as-default-charset ","Analyzed Examples - 1
+Issues - 0
+External Discussions - 1
+Java Documentations - 0"
+DMI_HARDCODED_ABSOLUTE_FILENAME,This code constructs a File object using a hard coded to an absolute pathname,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Dodgy code (STYLE),Code contains a hard coded reference to an absolute pathname,Not usually a False Positive,"1. The hardcoded absolute path is intentionally used for platform-specific system integration. For example:
+
+// The Apple system library location for Java
+public GenericApplication build(GenericApplicationSpecification specification) {
+  try {
+    // Attempt to locate the Apple Java JDK
+    final File file = new File(""/System/Library/Java"");
+    if (file.exists()) {
+      // Load the Apple JDK classes
+      addUrl.invoke(systemClassLoader, file.toURI().toURL());
+    }
+
+    // Try to load the EAWT support classes
+    Class nativeApplicationClass = Class.forName(""com.apple.eawt.Application"");
+
+  } catch (ClassNotFoundException | IllegalAccessException |
+           NoSuchMethodException | InvocationTargetException |
+           MalformedURLException e) {
+    return new DefaultApplicationBuilder().build(specification);
+  }
+
+  log.debug(""Found EAWT libraries so building native bridge"");
+  return macApplication;
+}
+
+SpotBugs flags this as DMI_HARDCODED_ABSOLUTE_FILENAME because the code uses the absolute path ""/System/Library/Java"". However, this path is intentionally hardcoded to integrate with a Mac-specific system library. The comments and surrounding logic show that the code is explicitly trying to detect and load the Apple Java JDK, and it safely falls back to a default implementation if the library is not present.
+
+Since the path is deliberately tied to a specific platform for system integration, the warning does not indicate a defect and is considered unactionable.
+
+2. The hardcoded absolute path is intentionally used as part of core filesystem logic (e.g., root path handling). For example:
+
+public static boolean hasTrash() {
+    return hasTrash(Paths.get(""/""));
+}
+
+SpotBugs flags this as DMI_HARDCODED_ABSOLUTE_FILENAME because the code uses the absolute path ""/"". However, this usage is intentional, as it represents the filesystem root and is required for the logic of checking system-level features (e.g., trash availability).
+Since the root path is a well-defined and necessary concept in filesystem operations, the hardcoded path is part of the intended logic rather than a portability issue. Therefore, the warning does not indicate a defect and is considered unactionable.",,"Analyzed Examples, https://stackoverflow.com/questions/20368896/suppress-findbugs-warning-in-static-initializer/20416086#20416086 ","Analyzed Examples - 2
+Issues - 0
+External Discussions - 1
+Java Documentations - 0"
+SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE,The method invokes the execute or addBatch method on an SQL statement with a String that seems to be dynamically generated. Consider using a prepared statement instead. It is more efficient and less vulnerable to SQL injection attacks.,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Security (SECURITY),User input concatenated into SQL query,"1. Pure false positives are uncommon because the SQL string really is dynamic in most flagged cases.
+2. The more important split is between safe constrained dynamism and risky value concatenation. ","1. Dynamic SQL is required to generate trusted schema identifiers such as table names or column names. Example:
+
+@SuppressFBWarnings(
+    value = ""SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE"",
+    justification = ""Category name determines the table name""
+)
+private static void upgrade22To23(Connection connection,
+                                  ChallengeDescription description) throws SQLException {
+  try (Statement stmt = connection.createStatement()) {
+    for (final SubjectiveScoreCategory categoryElement : description.getSubjectiveCategories()) {
+      String tableName = categoryElement.getName();
+
+      // add _comment for each goal
+      for (final AbstractGoal element : categoryElement.getGoals()) {
+        final String goalName = element.getName();
+
+        stmt.executeUpdate(String.format(
+            ""ALTER TABLE %s ADD COLUMN %s_comment longvarchar DEFAULT NULL"",
+            tableName, goalName));
+      }
+    }
+  }
+}
+
+This is unactionable when the dynamic part of the SQL is a trusted schema identifier, such as a table name or column name. PreparedStatement can parameterize values, but it cannot parameterize table names or column names. Therefore, dynamic SQL is necessary when schema identifiers are generated from trusted internal metadata or model definitions.
+
+2. Dynamic SQL is required for internal database setup, schema generation, or migration logic. Example:
+
+@SuppressFBWarnings(""SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE"")
+public synchronized void init(boolean force) {
+  StringBuilder sb = new StringBuilder();
+  sb.append(""CREATE TABLE FILES ("");
+  sb.append(""  ID INT AUTO_INCREMENT"");
+  sb.append("", FILENAME VARCHAR2(1024) NOT NULL"");
+  sb.append("", constraint PK1 primary key (FILENAME, MODIFIED, ID))"");
+  executeUpdate(conn, sb.toString());
+}
+
+This is unactionable when the SQL is generated internally as part of database creation, upgrade, or initialization logic. In such cases, the code often needs to build DDL statements like CREATE TABLE, DROP TABLE, or ALTER TABLE dynamically. Since the SQL is derived from internal application logic rather than external user input, the injection risk that SpotBugs warns about usually does not apply.
+
+3. Executing dynamic SQL is the intended feature of a restricted developer or administrative tool. Example:
+
+@SuppressFBWarnings(
+    value = ""SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE"",
+    justification = ""Executing query from user""
+)
+protected void processRequest(HttpServletRequest request, ...) throws IOException, ServletException {
+  final String query = request.getParameter(QUERY_PARAMETER);
+  stmt = connection.createStatement();
+  rs = stmt.executeQuery(query);
+}
+
+This is only unactionable in a narrow context where arbitrary SQL execution is the intended behavior of a developer or administrative query tool. In such cases, the warning describes the behavior correctly, and the design may be acceptable if access is tightly restricted and the feature is explicitly intended for trusted users.",,"https://stackoverflow.com/questions/10500305/how-to-avoid-security-a-prepared-statement-is-generated-from-a-nonconstant-st , https://stackoverflow.com/questions/74994393/spotbugs-sql-injection-warning-is-false-positive-in-this-case ","Analyzed Examples - 1
+Issues - 0
+External Discussions - 2
+Java Documentations - 0"
+SIC_INNER_SHOULD_BE_STATIC_ANON,"This class is an inner class, but does not use its embedded reference to the object which created it. Keeping this reference makes instances larger and may keep the reference to the creator object alive longer than necessary. If possible, the class should be made static. Since anonymous inner classes cannot be static, this requires refactoring it into a named inner class.",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Performance (PERFORMANCE),Non-static inner unnecessarily holds an outer-instance reference,"1. Anonymous inner classes sometimes capture local variables or method context. In such cases, converting them to a static inner class is not straightforward and may change the structure or behavior of the code. For Example,
+
+final WebPageContentReader mockWebPageContentReader = mock(WebPageContentReader.class);
+
+final ContentReadingService testContentReadingService = new ContentReadingService() {
+    @Override
+    protected SyndicationItemContentReader webPageContentReader() {
+        return mockWebPageContentReader;
+    }
+};
+
+SpotBugs reports SIC_INNER_SHOULD_BE_STATIC_ANON, suggesting that the anonymous inner class can be converted to a static inner class. However, the anonymous class uses a local variable (mockWebPageContentReader) defined in the enclosing method.
+A static inner class cannot directly access local method variables and would require restructuring (e.g., passing dependencies explicitly). Therefore, the warning is misleading in this context and is considered a false positive.","1. Fixing the warning requires refactoring the anonymous inner class into a named static class, which may reduce readability and add unnecessary complexity with little practical benefit. Example:
+
+@SuppressFBWarnings(
+    value = ""SIC_INNER_SHOULD_BE_STATIC_ANON"",
+    justification = ""Static inner class to replace anonomous listener isn't worth the confusion of finding the class definition""
+)
+private boolean validateData() {
+  ...
+  final JDialog dialog = new JDialog(this, ""Warnings"");
+  final JButton okButton = new JButton(""Ok"");
+
+  okButton.addActionListener(new ActionListener() {
+    public void actionPerformed(final ActionEvent ae) {
+      dialog.setVisible(false);
+      dialog.dispose();
+    }
+  });
+  ...
+}
+
+SpotBugs flags this as SIC_INNER_SHOULD_BE_STATIC_ANON because the anonymous inner class could theoretically be replaced with a static inner class to avoid capturing the outer context. However, in this case, the listener is short, local, and directly tied to the surrounding UI logic. Converting it to a separate static inner class would make the code harder to follow by separating a small event handler from the place where it is used.
+
+Since the anonymous listener improves locality and readability, and the code explicitly documents this design choice, the warning does not indicate a meaningful defect and is considered unactionable. 
+",,"Examples with explicit comment, github discussions, https://github.com/spotbugs/spotbugs/issues/2428","Analyzed Examples - 1
+Issues - 1
+External Discussions - 0
+Java Documentations - 0"
+REC_CATCH_EXCEPTION,"This method catches Exception, but no checked exception is thrown in the try block, and RuntimeException is not handled separately. Developers sometimes use catch (Exception e) as a shortcut to handle multiple exceptions with identical logic, but this pattern can also unintentionally catch RuntimeException, potentially masking bugs.
+
+A better approach is to catch the specific exceptions thrown, or explicitly rethrow RuntimeException and handle other exceptions separately:
+
+try {
+    ...
+} catch (RuntimeException e) {
+    throw e;
+} catch (Exception e) {
+    ... handle non-runtime exceptions ...
+}",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Dodgy code (STYLE),Catching broad Exception instead of specific type,Not usually a False Positive.,"1. Broad exception is used intentionally to handle different failures in the same way and trigger a fallback.
+In some cases, code performs operations (e.g., reflection, external APIs, system calls) that can fail in many different ways, but all failures are handled identically. Instead of catching multiple specific exceptions, developers intentionally catch Exception to trigger a fallback behavior. For example:
+
+public static boolean isProcessIsAlive(@Nullable Process process) {
+    if (process == null) {
+        return false;
+    }
+
+    try {
+        Field field = process.getClass().getDeclaredField(""handle"");
+        field.setAccessible(true);
+        long handle = (long) field.get(process);
+
+        field = process.getClass().getDeclaredField(""STILL_ACTIVE"");
+        field.setAccessible(true);
+        int stillActive = (int) field.get(process);
+
+        Method method = process.getClass().getDeclaredMethod(""getExitCodeProcess"", long.class);
+        method.setAccessible(true);
+        int exitCode = (int) method.invoke(process, handle);
+
+        return exitCode == stillActive;
+
+    } catch (Exception e) {
+        // Reflection failed, use the backup solution
+    }
+
+    try {
+        process.exitValue();
+        return false;
+    } catch (IllegalThreadStateException e) {
+        return true;
+    }
+}
+
+SpotBugs flags REC_CATCH_EXCEPTION because the code catches the broad type Exception. However, the reflection-based logic can fail due to many different checked exceptions (e.g., NoSuchFieldException, IllegalAccessException, InvocationTargetException).
+In this design, all such failures are treated the same, they trigger a fallback mechanism (process.exitValue()).
+
+Catching each exception separately would add unnecessary verbosity without changing the handling logic. Therefore, the broad catch is intentional and appropriate, and the warning is considered unactionable.
+",,,"Analyzed Examples - 1
+Issues - 0
+External Discussions - 0
+Java Documentations - 0"
+UWF_FIELD_NOT_INITIALIZED_IN_CONSTRUCTOR,"This field is never initialized within any constructor, and is therefore could be null after the object is constructed. Elsewhere, it is loaded and dereferenced without a null check. This could be either an error or a questionable design, since it means a null pointer exception will be generated if that field is dereferenced before being initialized.",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Dodgy code (STYLE),Field remains possibly uninitialized,"1. False positive due to lambda/dataflow analysis. For example:
+
+private List<Restriction<? super M>> availableRestrictions;
+
+protected void doSetAvailableRestrictions(Instance<Restriction<? super M>> availableRestrictions) {
+    this.availableRestrictions = ...;
+    logger.info(""Got {} restriction{} injected"",
+            () -> this.availableRestrictions.size(),
+            () -> this.availableRestrictions.size() == 1 ? """" : ""s"");
+}
+
+SpotBugs reports UWF_FIELD_NOT_INITIALIZED_IN_CONSTRUCTOR for the uses of availableRestrictions inside the lambdas. However, the field is assigned immediately before those lambda expressions are created. The reporter explicitly notes that “it is set one line above, so this should not be reported,” which shows that the warning is caused by analyzer limitations rather than a real initialization problem.","1. Fields are initialized in test setup methods. For Example:
+
+@SuppressFBWarnings(
+    value = ""UWF_FIELD_NOT_INITIALIZED_IN_CONSTRUCTOR"",
+    justification = ""fields are initialized in test setup""
+)
+@Test
+public void testStartupState() {
+    window.show();
+    final JTabbedPaneFixture tabbedPane = window.tabbedPane();
+    ...
+}
+
+SpotBugs reports UWF_FIELD_NOT_INITIALIZED_IN_CONSTRUCTOR because some fields used in the test are not initialized in the constructor. However, the justification indicates that these fields are initialized in test setup methods.
+In testing frameworks, this is a standard practice. Therefore, the warning does not indicate a real issue and is considered unactionable.",,"Analyzed example, https://github.com/spotbugs/spotbugs/issues/949, https://github.com/spotbugs/spotbugs/issues/567 ","Analyzed Examples - 1
+Issues - 2
+External Discussions - 0
+Java Documentations - 0"
+ST_WRITE_TO_STATIC_FROM_INSTANCE_METHOD,"This instance method writes to a static field. This is tricky to get correct if multiple instances are being manipulated, and generally bad practice.",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Malicious code vulnerability (MALICIOUS_CODE),Treat as Technical Debt when instance-level behavior mutates shared static state without a compelling architecture-level reason or without routing the write through an explicit static owner.,True false positives are uncommon because the write to static state is explicit.,"1. Instance test fixtures often reset static globals to isolate the environment for each test run.
+2. Singleton/bootstrap UI code can also be acceptable when an instance constructor is intentionally wiring one global application frame or event-bus registration handle.
+3. Operational reset methods that rebuild a shared static executor/service can be acceptable only when the class clearly owns that global lifecycle.
+4. These suppressions should stay narrow. Without obvious singleton/test/bootstrap context, instance-to-static writes are typically poor shared-state design.",,"Developer's comments (2), https://sourceforge.net/p/findbugs/bugs/813/,  https://stackoverflow.com/questions/4869004/writing-to-a-static-variable-in-an-instance-method-why-is-this-a-bad-practice","Analyzed Examples - 2
+Issues - 0
+External Discussions - 2
+Java Documentations - 0"
+MS_SHOULD_BE_FINAL,"A public or protected static field is mutable and not final, so it can be changed accidentally or by outside code.",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Malicious code vulnerability (MALICIOUS_CODE),"A public or protected static field is mutable and globally writable, creating weak encapsulation and hidden shared state. This should be treated as Technical Debt when the field acts as a writable global flag, configuration value, or object reference without a strong externally imposed architectural reason.",True false positives are uncommon because the field mutability is directly visible in the code.,"1. Developers often consider auto-generated code as Unactionable and suppress such warnings. For example:
+
+protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
+    internalGetFieldAccessorTable() {
+  return ExampleProtos.internal_static_Tag_fieldAccessorTable
+      .ensureFieldAccessorsInitialized(
+          ExampleProtos.Tag.class, ExampleProtos.Tag.Builder.class);
+}
+
+This kind of protobuf-style generated structure may expose mutable static field-accessor helpers as part of the generated API, making the warning acceptable in context.
+
+2. Framework, plugin, or scripting integration can also make a mutable static field acceptable when it is intentionally exposed for external runtime access. For example:
+
+@SuppressFBWarnings(value = ""MS_SHOULD_BE_FINAL"", justification = ""Accessible via system scripts"")
+public static String CLI_HOST_NAME =
+    SystemProperties.getString(SomeListener.class.getName() + "".hostName"");
+
+Here the field is intentionally left mutable so it can be inspected or adjusted by external runtime tooling rather than treated as an ordinary internal constant.",,"Developer's clear comment and justification, Spotbugs documentation","Analyzed Examples - 10
+Issues - 0
+External Discussions - 0
+Java Documentations - 0"
+NP_BOOLEAN_RETURN_NULL,"A method with return type Boolean may explicitly or implicitly return null, which becomes dangerous if callers auto-unbox it to boolean.",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Correctness (CORRECTNESS),"A method with return type Boolean may return null without a strong semantic reason, creating a risk of NullPointerException when callers auto-unbox the result to boolean.","1. Developers may consider this warning a false positive when the method does not explicitly return null and instead either returns a boolean-producing expression or throws an exception. For example:
+
+@SuppressFBWarnings(""NP_BOOLEAN_RETURN_NULL"")
+private static Boolean isSymlinkJava7(@Nonnull File file) throws IOException {
+    try {
+        Path path = file.toPath();
+        return Files.isSymbolicLink(path);
+    } catch (Exception x) {
+        throw (IOException) new IOException(x.toString()).initCause(x);
+    }
+}
+
+Here, the method either returns the result of a boolean-producing operation or throws, so the reported nullable Boolean path does not correspond to the visible code.
+
+2. The same pattern can occur in exception-handling or exception-translation code when the normal return value is definitely non-null and the exceptional path throws instead of returning null.
+
+","1. Developers often consider this warning Unactionable when Boolean is intentionally used as a tri-state value to distinguish true, false, and not-present. For example:
+
+public static Boolean getBooleanAttributeValue(final Element element,
+                                               final String attributeName) {
+  if (null == element) {
+    return null;
+  }
+  final String str = element.getAttribute(attributeName);
+  if (null == str || """".equals(str)) {
+    return null;
+  } else {
+    return Boolean.valueOf(str);
+  }
+}
+
+Here, null is intentionally used to indicate that the attribute is absent rather than to signal an error.
+
+2. In this kind of helper method, returning null preserves the distinction between “attribute missing” and “attribute present with a false value.”
+
+3. These cases should remain narrow: if the API does not intentionally model a third state, or if callers are expected to auto-unbox without checking for null, the warning is better treated as Technical Debt.",,"analyzed examples, https://stackoverflow.com/questions/11185321/when-should-null-values-of-boolean-be-used , https://stackoverflow.com/questions/11005286/check-if-null-boolean-is-true-results-in-exception
+","Analyzed Examples - 2
+Issues - 0
+External Discussions - 2
+Java Documentations - 0"
+NP_LOAD_OF_KNOWN_NULL_VALUE,"The variable referenced at this point is known to be null due to an earlier check against null. Although this is valid, it might be a mistake (perhaps you intended to refer to a different variable, or perhaps the earlier check to see if the variable is null should have been a check to see if it was non-null).
+
+",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Dodgy code (STYLE),"The code references a variable that is already known to be null because of earlier control flow. This should be treated as Technical Debt when the warning reflects a genuine logic mistake, such as checking the wrong condition, using the wrong variable, or missing the correct non-null guard.
+","1. Developers may consider this warning a false positive when a variable is initialized to null and then populated through a staged fallback chain, but the analyzer still treats a later use as loading a known-null value. For example:
+
+MixerWrapper mw = null;
+if (mw == null && valueString != null) {
+    mw = getMixerWrapperByName(valueString);
+}
+if (mw == null && defaultValueString != null) {
+    mw = getMixerWrapperByName(defaultValueString);
+}
+if (mw == null) mw = DEFAULT_MIXER_WRAPPER;
+setValue(mw);
+
+Here, the null checks are part of the intended fallback initialization, and the final use is protected by assigning a default value.
+
+2. A similar false positive can occur in staged lookup logic. For example:
+
+Language l = null;
+if (l == null && valueString != null) {
+    l = getLanguage(valueString);
+}
+if (l == null && defaultValueString != null) {
+    l = getLanguage(defaultValueString);
+}
+if (l == null) {
+    l = getLanguage(Messages.AUTOMATIC);
+}
+setValue(l);
+
+Again, the visible logic ensures that the variable is assigned through fallback branches before use.
+
+3. This warning can also arise in branch-heavy logic where the analyzer propagates a “known null” fact too aggressively or loses track of how values are populated across control-flow paths. Reported cases include fallback comparison logic and double-checked retrieval patterns, where the flagged variable is not actually null on the execution path being discussed.
+
+4. Tool bugs are also an explicit pattern for this warning. In some cases, developers suppress the warning specifically because they believe it reflects an analyzer limitation rather than a real null defect.","1. Developers rarely treat this warning as Unactionable, because loading a value that is known to be null usually reflects either a real logic problem or an analyzer limitation.
+
+2. In most non-debt cases, the warning is better categorized as False Positive, especially when the code uses guarded fallback initialization or the analyzer misinterprets control-flow reasoning.
+
+3. Unactionable should be reserved for rare situations where an explicit API or framework contract makes the flagged null load irrelevant in practice.",,"Code examples (f_a_3 , f_a_4, fll_a_23)
+External discussion:
+https://sourceforge.net/p/findbugs/bugs/1047/ 
+https://stackoverflow.com/questions/56877891/maven-comparableversion-contains-a-bug-of-load-of-known-null-value https://stackoverflow.com/questions/39822749/findbugs-np-load-of-known-null-value-singleton-class-double-checking ","Analyzed Examples - 3
+Issues - 0
+External Discussions - 2
+Java Documentations - 0"
+UMAC_UNCALLABLE_METHOD_OF_ANONYMOUS_CLASS,"An anonymous class defines a method that is never called and doesn’t override any superclass method. Since such methods can’t be accessed externally, it is likely dead code or a failed override (e.g., due to a typo).",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Correctness (CORRECTNESS),"An anonymous class defines a method that does not override a superclass or interface method and is not reachable through ordinary calls. This should be treated as Technical Debt when the method is genuinely stray, dead, or misnamed code rather than being invoked through framework or runtime mechanisms.",True false positives are less common,"1. Developers often consider this warning Unactionable when the anonymous-class method is invoked through framework or runtime mechanisms rather than ordinary Java calls. For example:
+
+@Subscribe
+public void onShutdownEvent(ShutdownEvent event) {
+    if (ShutdownEvent.ShutdownType.SWITCH.equals(event.getShutdownType())) {
+        return;
+    }
+    try {
+        serverSocket.close();
+    } catch (IOException e) {
+        log.error(e.getMessage(), e);
+    }
+}
+
+Here, the method is intended to be discovered and invoked by an event framework rather than by direct calls from other classes.
+
+2. A similar pattern appears in closure or reflection-based integration. For example:
+
+@SuppressFBWarnings(value = ""UMAC_UNCALLABLE_METHOD_OF_ANONYMOUS_CLASS"",
+    justification = ""Closure invokes this via reflection"")
+public Object doCall(Object[] args) {
+    assert(args.length == 1);
+    assert(args[0] instanceof Shell);
+    Shell shell = (Shell) args[0];
+    XmlCommandRegistrar r = new XmlCommandRegistrar(shell, cl);
+    r.register(GroovyshCommand.class.getResource(""commands.xml""));
+    return null;
+}
+
+In this case, the method is not intended for direct Java invocation; it is called through closure or reflection machinery.
+
+3. These cases are strongest when the code includes explicit framework cues such as annotations, suppression justifications mentioning reflection, or runtime callback conventions. Without such evidence, the warning is better treated as suspicious.
+",,"FindBugs / SpotBugs bug descriptions (https://findbugs.sourceforge.net/allBugDescriptions.html, https://spotbugs.readthedocs.io/en/stable/detectors.html); analyzed examples from Code_examples.csv, including event-subscriber methods and closure methods invoked via reflection; https://stackoverflow.com/questions/30016410/anonymous-classes-private-methods-and-reflection 
+","Analyzed Examples - 2
+Issues - 0
+External Discussions - 2
+Java Documentations - 1"
+UUF_UNUSED_PUBLIC_OR_PROTECTED_FIELD,"This field is never used.  The field is public or protected, so perhaps it is intended to be used with classes not seen as part of the analysis. If not, consider removing it from the class.",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Dodgy code (STYLE),"A public or protected field appears unused and has no clear external contract requiring it. This should be treated as Technical Debt when the field is genuinely dead state, obsolete API surface, or unnecessary exposure rather than part of a framework or native interop contract.","1. Developers may consider this warning a false positive when the field is not used directly in ordinary Java calls, but is still required by code outside the analyzed scope. For example, native framework mappings may define public fields that are consumed through runtime interop rather than direct field reads in Java.
+
+2. This can occur in interop or framework-mapped classes where field access happens through native code, generated access logic, or runtime mechanisms that are invisible to static analysis. For example:
+
+public static class ByReference extends SomeNativeStructure implements Structure.ByReference {
+}
+
+public static class ByValue extends SomeNativeStructure implements Structure.ByValue {
+}
+
+Here, the fields of the mapped structure may appear unused in Java code even though they are part of the required runtime/native representation.","1. Developers often consider this warning Unactionable when public fields are required by native interop data structures. For example:
+
+class SERVICE_STATUS extends Structure {
+    public int dwServiceType;
+    public int dwCurrentState;
+
+    @Override
+    protected List getFieldOrder() {
+        return Arrays.asList(""dwServiceType"", ""dwCurrentState"");
+    }
+}
+
+Here, the public fields are part of the native memory layout contract rather than ordinary Java field usage.
+
+2. The same applies to larger native-interop structures. For example:
+
+public class SHELLEXECUTEINFO extends Structure {
+    public int cbSize = size();
+    public int fMask;
+    public Pointer hwnd;
+    public String lpVerb;
+    ...
+}
+
+In such cases, the fields are intentionally public because the interop framework relies on that exact structure shape.
+
+These cases are strongest when the code clearly extends Structure or Union, or when the justification explicitly states that the class is a native or JNA data structure. Without such evidence, an unused public or protected field is more likely Technical Debt.",,"https://spotbugs.readthedocs.io/en/stable/detectors.html; https://java-native-access.github.io/jna/4.2.0/com/sun/jna/Structure.html , code examples (jen_a_6
+jen_a_3
+jen_a_4
+jen_a_5
+jen_a_7
+jen_a_8
+jen_a_9
+UMS_a_55)","Analyzed Examples - 8
+Issues - 1
+External Discussions - 0
+Java Documentations - 1"
+OBL_UNSATISFIED_OBLIGATION_EXCEPTION_EDGE,"A method may fail to properly close or clean up a resource (e.g., stream or database object), especially if a checked exception occurs. If a method opens a resource, it should ensure cleanup (e.g., using try/finally or try-with-resources) before returning.",SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),Experimental (EXPERIMENTAL),"Developers should treat this warning as Technical Debt when a method is responsible for a stream, statement, or other resource but does not ensure cleanup on all checked-exception paths. This includes cases where the method allocates and uses the resource locally yet fails to close it reliably if an exception occurs.
+","1. Developers may consider this warning a false positive when the analyzer attributes the cleanup obligation to the current method even though the resource is intentionally handed off or the cleanup is already protected by the surrounding control flow.
+
+2. Sometimes SpotBugs raises this warning even when cleanup is handled through structured control flow such as try/finally or try-with-resources, suggesting that the exception-edge analysis can sometimes over-approximate the leak path.
+For example, a method like the following may be flagged even though the cleanup responsibility is intentionally separated:
+
+private static PreparedStatement getStmt(Connection c) throws SQLException {
+    PreparedStatement prep = null;
+    try {
+        prep = c.prepareStatement(SQL);
+    } catch (SQLException e) {
+        SQLFunctions.close(prep);
+        throw e;
+    }
+    return prep;
+}
+
+Here, the helper either closes the partially created statement on failure or returns the statement to the caller, so the warning may reflect ownership ambiguity rather than a real leak in the helper itself.","1. Developers often consider this warning Unactionable when a method returns a resource and the caller is explicitly responsible for closing it. For example, if a helper returns a PreparedStatement and the code or justification states that callers must clean it up, suppressing the warning reflects an intended ownership contract rather than a missed cleanup in the helper itself.",,"fll_a_23 for the false-positive style helper/ownership ambiguity example
+mh_a_40 and mh_a_41 for technical-debt style resource-leak cases
+fll_a_145 and fll_a_146 for caller-owned cleanup / unactionable interpretation
+
+SpotBugs detector documentation
+https://spotbugs.readthedocs.io/en/latest/detectors.html
+
+FindBugs bug report about unsatisfied obligation analysis
+https://sourceforge.net/p/findbugs/bugs/1424/
+
+Stack Overflow discussion on false positives for resource cleanup warnings
+https://stackoverflow.com/questions/47776786/is-spotbugs-reporting-a-false-positive-on-not-closing-a-resource-here
+
+Stack Overflow discussion on “method may fail to clean up stream or resource on checked exception”
+https://stackoverflow.com/questions/23961553/method-may-fail-to-clean-up-stream-or-resource-on-checked-exception-findbugs
+
+","Analyzed Examples - 5
+Issues - 0
+External Discussions - 3
+Java Documentations - 1"
+DM_EXIT,Invoking System.exit shuts down the entire Java virtual machine. This should only been done when it is appropriate. Such calls make it hard or impossible for your code to be invoked by other code. Consider throwing a RuntimeException instead.,SpotBugs official bug descriptions (https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html),BAd practice (BAD_PRACTICE),"Developers should treat this warning as Technical Debt when System.exit(...) is called from UI logic, callbacks, services, or other reusable code instead of propagating control to a higher-level lifecycle boundary. ",True false positives are uncommon because the call to System.exit(...) is explicit in the code.,"1. Developers often consider this warning Unactionable when the code is clearly part of a standalone application flow and exiting the JVM is the intended final action. For example, if the program cannot continue because the user did not select a required file or because a fatal startup error occurred, calling System.exit(...) may be an accepted design decision.
+
+2. A similar pattern appears when a method is explicitly documented to terminate the application if required input or configuration cannot be found. In such cases, the exit is part of the intended control flow rather than an accidental misuse of System.exit(...).
+
+These cases are strongest when the snippet clearly shows startup logic, fatal initialization failure, or another top-level application boundary. Without that evidence, direct JVM termination is more likely Technical Debt.",,"Code_examples.csv (fll_a_26, fll_a_29, fll_a_31, fll_a_32, mh_a_28, mh_a_50, mh_a_80, fll_a_85, fll_a_86);  https://findbugs.sourceforge.net/allBugDescriptions.html , https://spotbugs.readthedocs.io/en/stable/detectors.html ; Stack Overflow discussions:https://stackoverflow.com/questions/3715967/when-should-we-call-system-exit-in-java , https://stackoverflow.com/questions/2651210/system-exit0-in-java , https://stackoverflow.com/questions/28481093/java-is-it-bad-if-a-method-invokes-system-exit. 
+","Analyzed Examples - 9
+Issues - 0
+External Discussions - 3
+Java Documentations - 2"
+,,,,,,,,,
+,,,,,,,,,"Analyzed Examples: 84
+Issues: 14
+External Discussions: 21
+Documentations (Oracle, java, Spotbugs/FindBugs): 8"
