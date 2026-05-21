@@ -6,13 +6,13 @@ without modifying the individual classifier scripts.
 """
 
 # --- File paths ---
-DEFAULT_INPUT_PATH = "Evaluation_Set.csv"
+DEFAULT_INPUT_PATH = "Evaluation_Set/Evaluation_Set.csv"
 DEFAULT_RAG_PATH = "Knowledge_Base.csv"
 # GPT-5 (non-mini) `GPT5_Classifier.py` → columns GPT5_Output_*
-DEFAULT_OUTPUT_OPENAI = "GPT5_Output.csv"
+DEFAULT_OUTPUT_OPENAI = "Evaluation_Set/GPT5_Output.csv"
 # GPT-5 mini `GPT5mini_suppression_classifier.py` → columns GPT5mini_Output_*
-DEFAULT_OUTPUT_GPT5MINI = "GPT5mini_Output.csv"
-DEFAULT_OUTPUT_CLAUDE = "Claude_Output.csv"
+DEFAULT_OUTPUT_GPT5MINI = "Evaluation_Set/GPT5mini_Output.csv"
+DEFAULT_OUTPUT_CLAUDE = "Evaluation_Set/Claude_Output.csv"
 
 
 # --- Prompts ---

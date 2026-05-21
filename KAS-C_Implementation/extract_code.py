@@ -102,7 +102,7 @@ def process_csv(input_path: str, output_path: str | None = None) -> None:
 if __name__ == '__main__':
     import sys
 
-    input_file = 'Evaluation_Set/Input.csv'
+    input_file = 'Evaluation_Set/KAS_Bench_Post_Cut_Off.csv'
     output_file = 'Evaluation_Set/Evaluation_Set.csv'
 
     if len(sys.argv) >= 2:
